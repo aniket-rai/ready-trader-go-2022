@@ -29,13 +29,9 @@ TICK_SIZE_IN_CENTS = 100
 
 
 class AutoTrader(BaseAutoTrader):
-    """Example Auto-trader.
-
-    When it starts this auto-trader places ten-lot bid and ask orders at the
-    current best-bid and best-ask prices respectively. Thereafter, if it has
-    a long position (it has bought more lots than it has sold) it reduces its
-    bid and ask prices. Conversely, if it has a short position (it has sold
-    more lots than it has bought) then it increases its bid and ask prices.
+    """
+    Apple - First attempt at Ichimoku.
+    
     """
 
     def __init__(self, loop: asyncio.AbstractEventLoop, team_name: str, secret: str):

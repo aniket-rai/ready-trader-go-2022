@@ -54,13 +54,62 @@ def calculate_senkou_span_b(data):
     senkou_span_b_data = [None for _ in range(78)] + temp
     return senkou_span_b_data
 
-tenkan = calculate_tenkan_sen(data)
-kijun = calculate_kijun_sen(data)
-ssa = calculate_senkou_span_a(data, tenkan, kijun)
-ssb = calculate_senkou_span_b(data)
-# for index, (row, a, b) in enumerate(zip(data + [[None for _ in range(4)] for _ in range(26)], ssa, ssb)):
-#     print(index, row + [a] + [b])
+def make_prediction(data, price):
+    """" Buy Signals -
+            Price above Cloud
+            Cloud is Green
+            Price Above Kijun/Base
+            Tenkan/Conversion above Kijun/Base [Primary]
+
+        -The current moment is located at index 78-
+
+    """
+    tenkan = calculate_tenkan_sen(data)
+    kijun = calculate_kijun_sen(data)
+    ssa = calculate_senkou_span_a(data, tenkan, kijun)
+    ssb = calculate_senkou_span_b(data)
+
+    for index, (t,k,a,b) in enumerate(zip(tenkan, kijun, ssa, ssb)):
+        print(index, [t,k,a,b])
+
+    cloud = [value_a - value_b if value_a and value_b else None for value_a, value_b in zip(ssa[78:], ssb[78:])]
+    print(cloud)
+    # cloud_range = sorted([ssa[78], ssb[78]]) #[lower, higher]
+
+    #Signal 1
+    if price > max(ssa[78], ssb[78]):
+        print('Buy Signal 1')
+    elif price < min(ssa[78], ssb[78]):
+        print('Sell Signal 1')
+    else:
+        print('Hold until out of cloud')
+    
+    #Signal 2
+    if all(x > 0 for x in cloud[:13]):
+        #13 is arbitrary half here
+        print('Buy Signal 2')
+    elif all(x < 0 for x in cloud[:13]):
+        print('Sell Signal 2')
+    else:
+        print('Weird Market')
+    
+    #Signal 3
+    if price > kijun[77]:
+        print('Buy Signal 3')
+    elif price < kijun[77]:
+        print('Sell Signal 3')
+    else:
+        print('Inconclusive Signal')
+    
+    #Main signal
+    if tenkan[77] > kijun[77]:
+        print('Main Buy Signal')
+    elif tenkan[77] < kijun[77]:
+        print('Main Sell Signal')
+    else:
+        print('This should just depend on current strategy')
+
+data = data[len(data) - 78:]
+make_prediction(data, 2800)
 
 
-def make_prediction():
-    pass

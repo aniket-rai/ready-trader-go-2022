@@ -194,7 +194,7 @@ class AutoTrader(BaseAutoTrader):
         If the error pertains to a particular order, then the client_order_id
         will identify that order, otherwise the client_order_id will be zero.
         """
-        self.logger.warning("error with order %d: %s", client_order_id, error_message.decode())
+        # self.logger.warning("error with order %d: %s", client_order_id, error_message.decode())
         if client_order_id != 0:
             self.on_order_status_message(client_order_id, 0, 0, 0)
 
@@ -207,7 +207,7 @@ class AutoTrader(BaseAutoTrader):
 
         If the order was unsuccessful, both the price and volume will be zero.
         """
-        self.logger.info("received hedge filled for order %d with average price %d and volume %d", client_order_id, price, volume)
+        # self.logger.info("received hedge filled for order %d with average price %d and volume %d", client_order_id, price, volume)
 
     def on_order_book_update_message(self, instrument: int, sequence_number: int, ask_prices: List[int],
                                      ask_volumes: List[int], bid_prices: List[int], bid_volumes: List[int]) -> None:
@@ -229,10 +229,10 @@ class AutoTrader(BaseAutoTrader):
 
                 if strategy[0] == Strategy.BUY:
                     new_bid_price = ask_prices[0] if ask_prices[0] != 0 else 0
-                    # new_ask_price = ask_prices[2] if ask_prices[2] != 0 else 0
+                    new_ask_price = ask_prices[2] if ask_prices[2] != 0 else 0
                 elif strategy[0] == Strategy.SELL:
                     new_ask_price = bid_prices[0] if bid_prices[0] != 0 else 0
-                    # new_bid_price = bid_prices[2] if bid_prices[2] != 0 else 0
+                    new_bid_price = bid_prices[2] if bid_prices[2] != 0 else 0
 
                 if self.bid_id != 0 and new_bid_price not in (self.bid_price, 0): 
                     #only one bid at a time
@@ -250,14 +250,13 @@ class AutoTrader(BaseAutoTrader):
                 active_asks = sum([ask[2] for ask in self.asks])
 
                 if self.bid_id == 0 and new_bid_price != 0 and self.__position + active_bids + LOT_SIZE < POSITION_LIMIT:
-                    self.logger.info(f'Placing a bid based off information POSITION: {self.__position} | ACTIVE_BIDS: {active_bids} | LOT_SIZE: {LOT_SIZE}')
+                    # self.logger.info(f'Placing a bid based off information POSITION: {self.__position} | ACTIVE_BIDS: {active_bids} | LOT_SIZE: {LOT_SIZE}')
                     self.bid_id = next(self.order_ids)
                     self.bid_price = new_bid_price
                     self.send_insert_order(self.bid_id, Side.BUY, new_bid_price, LOT_SIZE, Lifespan.GOOD_FOR_DAY)
                     self.bids.add((self.bid_id, new_bid_price, LOT_SIZE))
 
                 if self.ask_id == 0 and new_ask_price != 0 and self.__position - active_asks - LOT_SIZE > -POSITION_LIMIT:
-                    self.logger.info(f'Placing an ask based off information POSITION: {self.__position} | ACTIVE_ASKS: {active_asks} | LOT_SIZE: {LOT_SIZE}')
                     self.ask_id = next(self.order_ids)
                     self.ask_price = new_ask_price
                     self.send_insert_order(self.ask_id, Side.SELL, new_ask_price, LOT_SIZE, Lifespan.GOOD_FOR_DAY)

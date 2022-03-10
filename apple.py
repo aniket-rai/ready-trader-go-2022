@@ -17,17 +17,21 @@
 #     <https://www.gnu.org/licenses/>.
 import asyncio
 import itertools
+import enum
 
 from typing import List
 
 from ready_trader_go import BaseAutoTrader, Instrument, Lifespan, MAXIMUM_ASK, MINIMUM_BID, Side
 
-
 LOT_SIZE = 10
 POSITION_LIMIT = 100
 TICK_SIZE_IN_CENTS = 100
 
-
+class Strategy(enum.IntEnum):
+    SELL = 0
+    BUY = 1
+    HOLD = 2
+    
 class AutoTrader(BaseAutoTrader):
     """
     Apple - First attempt at Ichimoku.
@@ -43,6 +47,7 @@ class AutoTrader(BaseAutoTrader):
         self.ask_id = self.ask_price = self.bid_id = self.bid_price = self.position = 0
 
         self.__price_list = []
+        self.__strategy = Strategy.BUY
     
     def __update_price_list(self, new_price):
         if len(self.__price_list) == 78:
@@ -116,47 +121,69 @@ class AutoTrader(BaseAutoTrader):
 
         current_price = self.__price_list[77]
         cloud = [value_a - value_b if value_a and value_b else None for value_a, value_b in zip(ssa[78:], ssb[78:])]
-        print(cloud)
+        # print(cloud)
         # cloud_range = sorted([ssa[78], ssb[78]]) #[lower, higher]
 
+        #basic implementation
+        signal = 0
         #Signal 1
         if  current_price > max(ssa[78], ssb[78]):
-            print('Buy Signal 1')
+            signal +=1
+            # print('Buy Signal 1')
         elif  current_price < min(ssa[78], ssb[78]):
-            print('Sell Signal 1')
+            signal -=1
+            # print('Sell Signal 1')
         else:
-            print('Hold until out of cloud')
+            pass
+            # print('Hold until out of cloud')
         
         #Signal 2
-        if all(x > 0 for x in cloud[:13]):
+        if all(x >= 0 for x in cloud[:13]):
             #13 is arbitrary half here
-            print('Buy Signal 2')
-        elif all(x < 0 for x in cloud[:13]):
-            print('Sell Signal 2')
+            signal +=1
+            # print('Buy Signal 2')
+        elif all(x <= 0 for x in cloud[:13]):
+            signal -=1
+            # print('Sell Signal 2')
         else:
-            print('Weird Market')
+            pass
+            # print('Weird Market')
         
         #Signal 3
         if  current_price > kijun[77]:
-            print('Buy Signal 3')
+            signal += 1
+            # print('Buy Signal 3')
         elif  current_price < kijun[77]:
-            print('Sell Signal 3')
+            signal -=1
+            # print('Sell Signal 3')
         else:
-            print('Inconclusive Signal')
+            pass
+            # print('Inconclusive Signal')
         
         #Main signal
         if tenkan[77] > kijun[77]:
-            print('Main Buy Signal')
+            signal += 1
+            # print('Main Buy Signal')
         elif tenkan[77] < kijun[77]:
-            print('Main Sell Signal')
+            signal -= 1
+            # print('Main Sell Signal')
         else:
-            print('This should just depend on current strategy')
+            pass
+            # print('This should just depend on current strategy')
         
         #Exit Signal
-        if chikou[51] < current_price:
-            'Chikou below price'
+        # if chikou[51] < current_price:
+        #     'Chikou below price'
+        # else:
+        #     'Chikou at or above price'
+
+        confidence = round(abs(signal) / 4, 2)
+        if signal < 0:
+            return (Strategy.SELL, confidence)
+        elif signal > 0:
+            return (Strategy.BUY, confidence)
         else:
-            'Chikou at or above price'
+            return (Strategy.HOLD, confidence)
 
     def on_error_message(self, client_order_id: int, error_message: bytes) -> None:
         """Called when the exchange detects an error.

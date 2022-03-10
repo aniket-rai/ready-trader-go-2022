@@ -44,13 +44,13 @@ class AutoTrader(BaseAutoTrader):
         self.order_ids = itertools.count(1)
         self.bids = set()
         self.asks = set()
-        self.ask_id = self.ask_price = self.bid_id = self.bid_price = self.position = 0
+        self.ask_id = self.ask_price = self.bid_id = self.bid_price = 0
 
         self.__price_list = []
         self.__strategy = Strategy.BUY
         self.__position = 0
-        self.__active_bids = 0
-        self.__active_asks = 0
+        # self.__active_bids = 0
+        # self.__active_asks = 0
     
     def __update_price_list(self, new_price):
         if len(self.__price_list) == 78:
@@ -207,8 +207,7 @@ class AutoTrader(BaseAutoTrader):
 
         If the order was unsuccessful, both the price and volume will be zero.
         """
-        self.logger.info("received hedge filled for order %d with average price %d and volume %d", client_order_id,
-                         price, volume)
+        self.logger.info("received hedge filled for order %d with average price %d and volume %d", client_order_id, price, volume)
 
     def on_order_book_update_message(self, instrument: int, sequence_number: int, ask_prices: List[int],
                                      ask_volumes: List[int], bid_prices: List[int], bid_volumes: List[int]) -> None:
@@ -219,46 +218,50 @@ class AutoTrader(BaseAutoTrader):
         prices are reported along with the volume available at each of those
         price levels.
         """
-        self.logger.info("received order book for instrument %d with sequence number %d", instrument,
-                         sequence_number)
+        # self.logger.info("received order book for instrument %d with sequence number %d", instrument, sequence_number)
         if not bid_prices[0] and not ask_prices[0]:
             return
         if instrument == Instrument.FUTURE:
             new_bid_price = new_ask_price = 0
             self.__update_price_list(bid_prices[0])
-            if len(self.__price_list) == 78:
+            if len(self.__price_list) == 78: #78
                 strategy = self.__make_prediction()
 
                 if strategy[0] == Strategy.BUY:
                     new_bid_price = ask_prices[0] if ask_prices[0] != 0 else 0
-                    new_ask_price = ask_prices[2] if ask_prices[2] != 0 else 0
+                    # new_ask_price = ask_prices[2] if ask_prices[2] != 0 else 0
                 elif strategy[0] == Strategy.SELL:
                     new_ask_price = bid_prices[0] if bid_prices[0] != 0 else 0
-                    new_bid_price = bid_prices[2] if bid_prices[2] != 0 else 0
+                    # new_bid_price = bid_prices[2] if bid_prices[2] != 0 else 0
 
                 if self.bid_id != 0 and new_bid_price not in (self.bid_price, 0): 
                     #only one bid at a time
+                    self.logger.warning(f"Cancelling buy order {self.bid_id}")
                     self.send_cancel_order(self.bid_id)
                     self.bid_id = 0
 
                 if self.ask_id != 0 and new_ask_price not in (self.ask_price, 0):
                     #only one ask at a time
+                    self.logger.warning(f"Cancelling sell order {self.ask_id}")
                     self.send_cancel_order(self.ask_id)
                     self.ask_id = 0
+                
+                active_bids = sum([bid[2] for bid in self.bids])
+                active_asks = sum([ask[2] for ask in self.asks])
 
-                if self.bid_id == 0 and new_bid_price != 0 and self.__position + self.__active_bids + LOT_SIZE < POSITION_LIMIT:
+                if self.bid_id == 0 and new_bid_price != 0 and self.__position + active_bids + LOT_SIZE < POSITION_LIMIT:
+                    self.logger.info(f'Placing a bid based off information POSITION: {self.__position} | ACTIVE_BIDS: {active_bids} | LOT_SIZE: {LOT_SIZE}')
                     self.bid_id = next(self.order_ids)
                     self.bid_price = new_bid_price
                     self.send_insert_order(self.bid_id, Side.BUY, new_bid_price, LOT_SIZE, Lifespan.GOOD_FOR_DAY)
-                    self.__active_bids += LOT_SIZE
-                    self.bids.add(self.bid_id)
+                    self.bids.add((self.bid_id, new_bid_price, LOT_SIZE))
 
-                if self.ask_id == 0 and new_ask_price != 0 and self.__position - self.__active_asks - LOT_SIZE > -POSITION_LIMIT:
+                if self.ask_id == 0 and new_ask_price != 0 and self.__position - active_asks - LOT_SIZE > -POSITION_LIMIT:
+                    self.logger.info(f'Placing an ask based off information POSITION: {self.__position} | ACTIVE_ASKS: {active_asks} | LOT_SIZE: {LOT_SIZE}')
                     self.ask_id = next(self.order_ids)
                     self.ask_price = new_ask_price
                     self.send_insert_order(self.ask_id, Side.SELL, new_ask_price, LOT_SIZE, Lifespan.GOOD_FOR_DAY)
-                    self.__active_asks += LOT_SIZE
-                    self.asks.add(self.ask_id)
+                    self.asks.add((self.ask_id, new_ask_price, LOT_SIZE))
 
     def on_order_filled_message(self, client_order_id: int, price: int, volume: int) -> None:
         """Called when when of your orders is filled, partially or fully.
@@ -269,13 +272,11 @@ class AutoTrader(BaseAutoTrader):
         """
         self.logger.info("received order filled for order %d with price %d and volume %d", client_order_id,
                          price, volume)
-        if client_order_id in self.bids:
+        if client_order_id in [bid[0] for bid in self.bids]:
             self.__position += volume
-            self.__active_bids -= volume
             self.send_hedge_order(next(self.order_ids), Side.ASK, MINIMUM_BID, volume)
-        elif client_order_id in self.asks:
+        elif client_order_id in [ask[0] for ask in self.asks]:
             self.__position -= volume
-            self.__active_asks -= volume
             self.send_hedge_order(next(self.order_ids), Side.BID, MAXIMUM_ASK//TICK_SIZE_IN_CENTS*TICK_SIZE_IN_CENTS, volume)
 
     def on_order_status_message(self, client_order_id: int, fill_volume: int, remaining_volume: int,
@@ -291,18 +292,30 @@ class AutoTrader(BaseAutoTrader):
         """
         self.logger.info("received order status for order %d with fill volume %d remaining %d and fees %d",
                          client_order_id, fill_volume, remaining_volume, fees)
-        if remaining_volume == 0:
-            #if cancelled
-            if client_order_id == self.bid_id:
-                self.__active_bids -= fill_volume
-                self.bid_id = 0
-            elif client_order_id == self.ask_id:
-                self.__active_asks -= fill_volume
-                self.ask_id = 0
+        
+        #for a given id we check remaining_volume + filled_volume = bid_volume (not_cancelled)
+        #else (cancelled)
+        bid_order = next((result for result in self.bids if result[0] == client_order_id), None)
+        ask_order = next((result for result in self.asks if result[0] == client_order_id), None)
 
-            # It could be either a bid or an ask
-            self.bids.discard(client_order_id)
-            self.asks.discard(client_order_id)
+        if bid_order:
+            if remaining_volume == 0:
+                self.bids.remove(bid_order)
+            else:
+                new_bid = (bid_order[0], bid_order[1], remaining_volume)
+                self.bids.remove(bid_order)
+                self.bids.add(new_bid)            
+        elif ask_order:
+            if remaining_volume == 0:
+                self.asks.remove(ask_order)
+            else:
+                new_ask = (ask_order[0], ask_order[1], remaining_volume)
+                self.asks.remove(ask_order)
+                self.asks.add(new_ask)    
+        else:
+            # panic
+            self.logger.critical("Order %d not found", client_order_id)
+            pass
 
     def on_trade_ticks_message(self, instrument: int, sequence_number: int, ask_prices: List[int],
                                ask_volumes: List[int], bid_prices: List[int], bid_volumes: List[int]) -> None:
@@ -315,5 +328,4 @@ class AutoTrader(BaseAutoTrader):
         If there are less than five prices on a side, then zeros will appear at
         the end of both the prices and volumes arrays.
         """
-        self.logger.info("received trade ticks for instrument %d with sequence number %d", instrument,
-                         sequence_number)
+        #self.logger.info("received trade ticks for instrument %d with sequence number %d", instrument, sequence_number)

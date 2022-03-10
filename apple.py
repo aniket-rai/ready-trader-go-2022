@@ -48,6 +48,9 @@ class AutoTrader(BaseAutoTrader):
 
         self.__price_list = []
         self.__strategy = Strategy.BUY
+        self.__position = 0
+        self.__active_bids = 0
+        self.__active_asks = 0
     
     def __update_price_list(self, new_price):
         if len(self.__price_list) == 78:
@@ -221,9 +224,41 @@ class AutoTrader(BaseAutoTrader):
         if not bid_prices[0] and not ask_prices[0]:
             return
         if instrument == Instrument.FUTURE:
+            new_bid_price = new_ask_price = 0
             self.__update_price_list(bid_prices[0])
             if len(self.__price_list) == 78:
-                self.__make_prediction()
+                strategy = self.__make_prediction()
+
+                if strategy[0] == Strategy.BUY:
+                    new_bid_price = ask_prices[0] if ask_prices[0] != 0 else 0
+                    new_ask_price = ask_prices[2] if ask_prices[2] != 0 else 0
+                elif strategy[0] == Strategy.SELL:
+                    new_ask_price = bid_prices[0] if bid_prices[0] != 0 else 0
+                    new_bid_price = bid_prices[2] if bid_prices[2] != 0 else 0
+
+                if self.bid_id != 0 and new_bid_price not in (self.bid_price, 0): 
+                    #only one bid at a time
+                    self.send_cancel_order(self.bid_id)
+                    self.bid_id = 0
+
+                if self.ask_id != 0 and new_ask_price not in (self.ask_price, 0):
+                    #only one ask at a time
+                    self.send_cancel_order(self.ask_id)
+                    self.ask_id = 0
+
+                if self.bid_id == 0 and new_bid_price != 0 and self.__position + self.__active_bids + LOT_SIZE < POSITION_LIMIT:
+                    self.bid_id = next(self.order_ids)
+                    self.bid_price = new_bid_price
+                    self.send_insert_order(self.bid_id, Side.BUY, new_bid_price, LOT_SIZE, Lifespan.GOOD_FOR_DAY)
+                    self.__active_bids += LOT_SIZE
+                    self.bids.add(self.bid_id)
+
+                if self.ask_id == 0 and new_ask_price != 0 and self.__position - self.__active_asks - LOT_SIZE > -POSITION_LIMIT:
+                    self.ask_id = next(self.order_ids)
+                    self.ask_price = new_ask_price
+                    self.send_insert_order(self.ask_id, Side.SELL, new_ask_price, LOT_SIZE, Lifespan.GOOD_FOR_DAY)
+                    self.__active_asks += LOT_SIZE
+                    self.asks.add(self.ask_id)
 
     def on_order_filled_message(self, client_order_id: int, price: int, volume: int) -> None:
         """Called when when of your orders is filled, partially or fully.
@@ -234,6 +269,14 @@ class AutoTrader(BaseAutoTrader):
         """
         self.logger.info("received order filled for order %d with price %d and volume %d", client_order_id,
                          price, volume)
+        if client_order_id in self.bids:
+            self.__position += volume
+            self.__active_bids -= volume
+            self.send_hedge_order(next(self.order_ids), Side.ASK, MINIMUM_BID, volume)
+        elif client_order_id in self.asks:
+            self.__position -= volume
+            self.__active_asks -= volume
+            self.send_hedge_order(next(self.order_ids), Side.BID, MAXIMUM_ASK//TICK_SIZE_IN_CENTS*TICK_SIZE_IN_CENTS, volume)
 
     def on_order_status_message(self, client_order_id: int, fill_volume: int, remaining_volume: int,
                                 fees: int) -> None:
@@ -248,6 +291,18 @@ class AutoTrader(BaseAutoTrader):
         """
         self.logger.info("received order status for order %d with fill volume %d remaining %d and fees %d",
                          client_order_id, fill_volume, remaining_volume, fees)
+        if remaining_volume == 0:
+            #if cancelled
+            if client_order_id == self.bid_id:
+                self.__active_bids -= fill_volume
+                self.bid_id = 0
+            elif client_order_id == self.ask_id:
+                self.__active_asks -= fill_volume
+                self.ask_id = 0
+
+            # It could be either a bid or an ask
+            self.bids.discard(client_order_id)
+            self.asks.discard(client_order_id)
 
     def on_trade_ticks_message(self, instrument: int, sequence_number: int, ask_prices: List[int],
                                ask_volumes: List[int], bid_prices: List[int], bid_volumes: List[int]) -> None:

@@ -42,6 +42,122 @@ class AutoTrader(BaseAutoTrader):
         self.asks = set()
         self.ask_id = self.ask_price = self.bid_id = self.bid_price = self.position = 0
 
+        self.__price_list = []
+    
+    def __update_price_list(self, new_price):
+        if len(self.__price_list) == 78:
+            self.__price_list.pop(0)
+        self.__price_list.append(new_price)
+        # self.logger.info(f'Updated Price List : {self.__price_list[:3]} ... {self.__price_list[-3:]} Length: {len(self.__price_list)}')
+
+    def __get_rolling_average(self, data, WINDOW_SIZE):
+        #data is a list of integers representing the last 78 prices.
+        if len(data) < WINDOW_SIZE:
+            pass #IMPLEMENT A FAILSAFE FOR THIS
+        
+        rolling_average_data = []
+        for index in range(WINDOW_SIZE, len(data)):
+            rolling_max = max(x for x in data[index - WINDOW_SIZE : index])
+            rolling_min = min(x for x in data[index - WINDOW_SIZE : index])
+            rolling_avg = round((rolling_max + rolling_min) / 2)
+            rolling_average_data.append(rolling_avg)
+    
+        return rolling_average_data
+
+    def __calculate_tenkan_sen(self):
+        #The Conversion Line [(9D-High + 9D-Low) //2]
+        temp = self.__get_rolling_average(self.__price_list, WINDOW_SIZE=9)
+        tenkan_sen_data = [None for _ in range(9)] + temp + [None for _ in range(26)]
+        return tenkan_sen_data
+    
+    def __calculate_kijun_sen(self):
+        #The Base Line [(26D-High + 26D-Low) //2]
+        temp = self.__get_rolling_average(self.__price_list, WINDOW_SIZE=26)
+        kijun_sen_data = [None for _ in range(26)] + temp + [None for _ in range(26)]
+        return kijun_sen_data
+    
+    def __calculate_chikou_span(self):
+        #Lagging Span - 26 days backwards
+        chikou_span_data = [round(x) for x in self.__price_list[26:]] + [None for _ in range(52)]
+        return chikou_span_data
+
+    def __calculate_senkou_span_a(self, tenkan, kijun):
+        #Conversion and Base Midpoint, offset forwards by 26 (52 total)
+        senkou_span_a_data = [None for _ in range(52)]
+        for index in range(52, len(self.__price_list) + 26):
+            senkou_span_a_data.append((tenkan[index - 26] + kijun[index - 26]) // 2)
+        
+        return senkou_span_a_data   
+
+    def __calculate_senkou_span_b(self):
+        #[(52D-High + 52D-Low) // 2], offset forwards by 26 (78 total)
+        temp = self.__get_rolling_average(self.__price_list, WINDOW_SIZE=52)
+        senkou_span_b_data = [None for _ in range(78)] + temp
+        return senkou_span_b_data
+
+    def __make_prediction(self):
+        """" Buy Signals -
+                Price above Cloud
+                Cloud is Green
+                Price Above Kijun/Base
+                Tenkan/Conversion above Kijun/Base [Primary]
+
+            -The current moment is located at index 78-
+
+        """
+        tenkan = self.__calculate_tenkan_sen()
+        kijun = self.__calculate_kijun_sen()
+        chikou = self.__calculate_chikou_span()
+        ssa = self.__calculate_senkou_span_a(tenkan, kijun)
+        ssb = self.__calculate_senkou_span_b()
+        
+        # for index, (t,k,c,a,b) in enumerate(zip(tenkan, kijun, chikou, ssa, ssb))[70:]:
+        #     print(index, [t,k,c,a,b])
+
+        current_price = self.__price_list[77]
+        cloud = [value_a - value_b if value_a and value_b else None for value_a, value_b in zip(ssa[78:], ssb[78:])]
+        print(cloud)
+        # cloud_range = sorted([ssa[78], ssb[78]]) #[lower, higher]
+
+        #Signal 1
+        if  current_price > max(ssa[78], ssb[78]):
+            print('Buy Signal 1')
+        elif  current_price < min(ssa[78], ssb[78]):
+            print('Sell Signal 1')
+        else:
+            print('Hold until out of cloud')
+        
+        #Signal 2
+        if all(x > 0 for x in cloud[:13]):
+            #13 is arbitrary half here
+            print('Buy Signal 2')
+        elif all(x < 0 for x in cloud[:13]):
+            print('Sell Signal 2')
+        else:
+            print('Weird Market')
+        
+        #Signal 3
+        if  current_price > kijun[77]:
+            print('Buy Signal 3')
+        elif  current_price < kijun[77]:
+            print('Sell Signal 3')
+        else:
+            print('Inconclusive Signal')
+        
+        #Main signal
+        if tenkan[77] > kijun[77]:
+            print('Main Buy Signal')
+        elif tenkan[77] < kijun[77]:
+            print('Main Sell Signal')
+        else:
+            print('This should just depend on current strategy')
+        
+        #Exit Signal
+        if chikou[51] < current_price:
+            'Chikou below price'
+        else:
+            'Chikou at or above price'
+
     def on_error_message(self, client_order_id: int, error_message: bytes) -> None:
         """Called when the exchange detects an error.
 
@@ -75,29 +191,12 @@ class AutoTrader(BaseAutoTrader):
         """
         self.logger.info("received order book for instrument %d with sequence number %d", instrument,
                          sequence_number)
+        if not bid_prices[0] and not ask_prices[0]:
+            return
         if instrument == Instrument.FUTURE:
-            price_adjustment = - (self.position // LOT_SIZE) * TICK_SIZE_IN_CENTS
-            new_bid_price = bid_prices[0] + price_adjustment if bid_prices[0] != 0 else 0
-            new_ask_price = ask_prices[0] + price_adjustment if ask_prices[0] != 0 else 0
-
-            if self.bid_id != 0 and new_bid_price not in (self.bid_price, 0):
-                self.send_cancel_order(self.bid_id)
-                self.bid_id = 0
-            if self.ask_id != 0 and new_ask_price not in (self.ask_price, 0):
-                self.send_cancel_order(self.ask_id)
-                self.ask_id = 0
-
-            if self.bid_id == 0 and new_bid_price != 0 and self.position < POSITION_LIMIT:
-                self.bid_id = next(self.order_ids)
-                self.bid_price = new_bid_price
-                self.send_insert_order(self.bid_id, Side.BUY, new_bid_price, LOT_SIZE, Lifespan.GOOD_FOR_DAY)
-                self.bids.add(self.bid_id)
-
-            if self.ask_id == 0 and new_ask_price != 0 and self.position > -POSITION_LIMIT:
-                self.ask_id = next(self.order_ids)
-                self.ask_price = new_ask_price
-                self.send_insert_order(self.ask_id, Side.SELL, new_ask_price, LOT_SIZE, Lifespan.GOOD_FOR_DAY)
-                self.asks.add(self.ask_id)
+            self.__update_price_list(bid_prices[0])
+            if len(self.__price_list) == 78:
+                self.__make_prediction()
 
     def on_order_filled_message(self, client_order_id: int, price: int, volume: int) -> None:
         """Called when when of your orders is filled, partially or fully.
@@ -108,13 +207,6 @@ class AutoTrader(BaseAutoTrader):
         """
         self.logger.info("received order filled for order %d with price %d and volume %d", client_order_id,
                          price, volume)
-        if client_order_id in self.bids:
-            self.position += volume
-            self.send_hedge_order(next(self.order_ids), Side.ASK, MINIMUM_BID, volume)
-        elif client_order_id in self.asks:
-            self.position -= volume
-            self.send_hedge_order(next(self.order_ids), Side.BID,
-                                  MAXIMUM_ASK//TICK_SIZE_IN_CENTS*TICK_SIZE_IN_CENTS, volume)
 
     def on_order_status_message(self, client_order_id: int, fill_volume: int, remaining_volume: int,
                                 fees: int) -> None:
@@ -129,15 +221,6 @@ class AutoTrader(BaseAutoTrader):
         """
         self.logger.info("received order status for order %d with fill volume %d remaining %d and fees %d",
                          client_order_id, fill_volume, remaining_volume, fees)
-        if remaining_volume == 0:
-            if client_order_id == self.bid_id:
-                self.bid_id = 0
-            elif client_order_id == self.ask_id:
-                self.ask_id = 0
-
-            # It could be either a bid or an ask
-            self.bids.discard(client_order_id)
-            self.asks.discard(client_order_id)
 
     def on_trade_ticks_message(self, instrument: int, sequence_number: int, ask_prices: List[int],
                                ask_volumes: List[int], bid_prices: List[int], bid_volumes: List[int]) -> None:

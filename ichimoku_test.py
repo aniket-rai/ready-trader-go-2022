@@ -36,7 +36,7 @@ def calculate_kijun_sen(data):
 
 def calculate_chikou_span(data):
     #Lagging Span - 26 days backwards
-    chikou_span_data = [x[3] for x in data[26:]] + [None for _ in range(52)]
+    chikou_span_data = [round(x[3]) for x in data[26:]] + [None for _ in range(52)]
     return chikou_span_data
 
 def calculate_senkou_span_a(data, tenkan, kijun):
@@ -54,7 +54,7 @@ def calculate_senkou_span_b(data):
     senkou_span_b_data = [None for _ in range(78)] + temp
     return senkou_span_b_data
 
-def make_prediction(data, price):
+def make_prediction(data, price_data):
     """" Buy Signals -
             Price above Cloud
             Cloud is Green
@@ -66,20 +66,23 @@ def make_prediction(data, price):
     """
     tenkan = calculate_tenkan_sen(data)
     kijun = calculate_kijun_sen(data)
+    chikou = calculate_chikou_span(data)
     ssa = calculate_senkou_span_a(data, tenkan, kijun)
     ssb = calculate_senkou_span_b(data)
+    
 
-    for index, (t,k,a,b) in enumerate(zip(tenkan, kijun, ssa, ssb)):
-        print(index, [t,k,a,b])
+    for index, (t,k,c,a,b) in enumerate(zip(tenkan, kijun, chikou, ssa, ssb)):
+        print(index, [t,k,c,a,b])
 
+    current_price = price_data[77]
     cloud = [value_a - value_b if value_a and value_b else None for value_a, value_b in zip(ssa[78:], ssb[78:])]
     print(cloud)
     # cloud_range = sorted([ssa[78], ssb[78]]) #[lower, higher]
 
     #Signal 1
-    if price > max(ssa[78], ssb[78]):
+    if  current_price > max(ssa[78], ssb[78]):
         print('Buy Signal 1')
-    elif price < min(ssa[78], ssb[78]):
+    elif  current_price < min(ssa[78], ssb[78]):
         print('Sell Signal 1')
     else:
         print('Hold until out of cloud')
@@ -94,9 +97,9 @@ def make_prediction(data, price):
         print('Weird Market')
     
     #Signal 3
-    if price > kijun[77]:
+    if  current_price > kijun[77]:
         print('Buy Signal 3')
-    elif price < kijun[77]:
+    elif  current_price < kijun[77]:
         print('Sell Signal 3')
     else:
         print('Inconclusive Signal')
@@ -108,8 +111,14 @@ def make_prediction(data, price):
         print('Main Sell Signal')
     else:
         print('This should just depend on current strategy')
+    
+    #Exit Signal
+    if chikou[51] < current_price:
+        'Chikou below price'
+    else:
+        'Chikou at or above price'
 
 data = data[len(data) - 78:]
-make_prediction(data, 2800)
+make_prediction(data, [2800] * 110)
 
 
